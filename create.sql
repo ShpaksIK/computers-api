@@ -56,3 +56,8 @@ CREATE TABLE OrderItem (
     CONSTRAINT fk_orderitem_order FOREIGN KEY (id_order) REFERENCES "Order" (id),
     CONSTRAINT fk_orderitem_product FOREIGN KEY (id_product) REFERENCES Product (id)
 );
+
+INSERT INTO Role (name) VALUES
+('Пользователь'),
+('Менеджер'),
+('Администратор');
