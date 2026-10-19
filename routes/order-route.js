@@ -1,5 +1,5 @@
 const express = require('express');
-const { sql, getPool } = require('../database');
+const { getPool } = require('../database');
 
 const router = express.Router();
 
@@ -11,11 +11,12 @@ router.get('/user/:userId', async (req, res) => { // GET-маршрут с па�
         const pool = await getPool(); // Получаем соединение с БД из пула
 
         // Проверяем, существует ли пользователь
-        const userCheck = await pool.request()
-            .input('id', sql.Int, userId) // Передаем ID пользователя как параметр
-            .query('SELECT id FROM C_User WHERE id = @id'); // Ищем пользователя по ID
+        const userCheck = await pool.query(
+            'SELECT id FROM "User" WHERE id = $1',
+            [userId] // Передаем ID пользователя как параметр
+        );
 
-        if (userCheck.recordset.length === 0) { // Если пользователь не найден
+        if (userCheck.rows.length === 0) { // Если пользователь не найден
             return res.status(404).json({ // Отправляем ошибку 404 (не найдено)
                 success: false,
                 error: 'Пользователь не найден'
@@ -23,26 +24,24 @@ router.get('/user/:userId', async (req, res) => { // GET-маршрут с па�
         }
 
         // Получаем все заказы пользователя
-        const orders = await pool.request()
-            .input('id_user', sql.Int, userId) // Передаем ID пользователя
-            .query(`
-                SELECT 
-                    o.id,
-                    o.date,
-                    COUNT(DISTINCT oi.id) as items_count,
-                    SUM(oi.price * oi.quantity) as total_amount,
-                    STRING_AGG(p.name, ', ') as product_names
-                FROM C_Order o
-                LEFT JOIN C_OrderItem oi ON o.id = oi.id_order
-                LEFT JOIN C_Product p ON oi.id_product = p.id
-                WHERE o.id_user = @id_user
-                GROUP BY o.id, o.date
-                ORDER BY o.date DESC
-            `);
+        const orders = await pool.query(`
+            SELECT 
+                o.id,
+                o.date,
+                COUNT(DISTINCT oi.id) as items_count,
+                SUM(oi.price * oi.quantity) as total_amount,
+                STRING_AGG(p.name, ', ') as product_names
+            FROM "Order" o
+            LEFT JOIN OrderItem oi ON o.id = oi.id_order
+            LEFT JOIN Product p ON oi.id_product = p.id
+            WHERE o.id_user = $1
+            GROUP BY o.id, o.date
+            ORDER BY o.date DESC
+        `, [userId]);
 
         res.json({ // Отправляем JSON-ответ
             success: true, // Флаг успешного выполнения
-            data: orders.recordset.map(order => ({ // Преобразуем полученные данные
+            data: orders.rows.map(order => ({ // Преобразуем полученные данные
                 id: order.id, // ID заказа
                 date: order.date, // Дата заказа
                 items_count: order.items_count || 0, // Количество товаров (0 если нет товаров)

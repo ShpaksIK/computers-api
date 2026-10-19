@@ -1,5 +1,5 @@
 const express = require('express');
-const { sql, getPool } = require('../database');
+const { getPool } = require('../database');
 
 const router = express.Router();
 
@@ -7,12 +7,11 @@ const router = express.Router();
 router.get('/', async (req, res) => { // GET-маршрут для получения списка всех категорий
     try { // Блок для перехвата ошибок
         const pool = await getPool(); // Получаем соединение с БД из пула
-        const result = await pool.request() // Создаем запрос
-            .query('SELECT id, name FROM C_Category ORDER BY id'); // Выполняем SQL-запрос: выбираем ID и название, сортируем по ID
+        const result = await pool.query('SELECT id, name FROM Category ORDER BY id'); // Выполняем SQL-запрос: выбираем ID и название, сортируем по ID
         
         res.json({ // Отправляем JSON-ответ
             success: true, // Флаг успешного выполнения
-            data: result.recordset // Передаем полученные записи
+            data: result.rows // Передаем полученные записи
         });
     } catch (err) { // Ловим ошибки
         console.error('Ошибка получения категорий:', err); // Логируем ошибку в консоль
@@ -39,11 +38,12 @@ router.post('/', async (req, res) => { // POST-маршрут для созда�
         const pool = await getPool(); // Получаем соединение с БД
 
         // Проверяем, существует ли категория с таким названием
-        const existingCategory = await pool.request()
-            .input('name', sql.VarChar, name) // Передаем параметр name с типом VarChar
-            .query('SELECT id FROM C_Category WHERE name = @name'); // SQL-запрос на поиск по названию
+        const existingCategory = await pool.query(
+            'SELECT id FROM Category WHERE name = $1',
+            [name] // Передаем параметр name
+        );
 
-        if (existingCategory.recordset.length > 0) { // Если категория уже существует
+        if (existingCategory.rows.length > 0) { // Если категория уже существует
             return res.status(409).json({ // Отправляем ошибку конфликта (409)
                 success: false,
                 error: 'Категория с таким названием уже существует'
@@ -51,9 +51,10 @@ router.post('/', async (req, res) => { // POST-маршрут для созда�
         }
 
         // Создаем категорию
-        const result = await pool.request()
-            .input('name', sql.VarChar, name) // Передаем название
-            .query(`INSERT INTO C_Category (name) VALUES (@name)`); // Выполняем вставку
+        const result = await pool.query(
+            'INSERT INTO Category (name) VALUES ($1)',
+            [name] // Передаем название
+        );
         
         res.status(201).json({ // Отправляем ответ со статусом 201 (создано)
             success: true,
@@ -85,11 +86,12 @@ router.put('/:categoryId', async (req, res) => { // PUT-маршрут с пар
         const pool = await getPool(); // Получаем соединение с БД
 
         // Проверяем, существует ли категория
-        const existingCategory = await pool.request()
-            .input('id', sql.Int, categoryId) // Передаем ID как параметр
-            .query('SELECT id FROM C_Category WHERE id = @id'); // Ищем категорию по ID
+        const existingCategory = await pool.query(
+            'SELECT id FROM Category WHERE id = $1',
+            [categoryId] // Передаем ID как параметр
+        );
 
-        if (existingCategory.recordset.length === 0) { // Если категория не найдена
+        if (existingCategory.rows.length === 0) { // Если категория не найдена
             return res.status(404).json({ // Ошибка 404 (не найдено)
                 success: false,
                 error: 'Категория не найдена'
@@ -97,12 +99,12 @@ router.put('/:categoryId', async (req, res) => { // PUT-маршрут с пар
         }
 
         // Проверяем, не занято ли название другой категорией
-        const nameCheck = await pool.request()
-            .input('name', sql.NVarChar, name) // Передаем новое название
-            .input('id', sql.Int, categoryId) // Передаем ID текущей категории
-            .query('SELECT id FROM C_Category WHERE name = @name AND id != @id'); // Ищем категории с таким названием, кроме текущей
+        const nameCheck = await pool.query(
+            'SELECT id FROM Category WHERE name = $1 AND id != $2',
+            [name, categoryId] // Передаем новое название и ID текущей категории
+        );
 
-        if (nameCheck.recordset.length > 0) { // Если название уже занято
+        if (nameCheck.rows.length > 0) { // Если название уже занято
             return res.status(409).json({ // Ошибка конфликта
                 success: false,
                 error: 'Категория с таким названием уже существует'
@@ -110,10 +112,10 @@ router.put('/:categoryId', async (req, res) => { // PUT-маршрут с пар
         }
 
         // Обновляем категорию
-        await pool.request()
-            .input('id', sql.Int, categoryId) // Передаем ID
-            .input('name', sql.NVarChar, name) // Передаем новое название
-            .query('UPDATE C_Category SET name = @name WHERE id = @id'); // Выполняем обновление
+        await pool.query(
+            'UPDATE Category SET name = $1 WHERE id = $2',
+            [name, categoryId] // Передаем новое название и ID
+        );
 
         res.status(200).json({ // Отправляем успешный ответ со статусом 200
             success: true,
@@ -137,11 +139,12 @@ router.delete('/:categoryId', async (req, res) => { // DELETE-маршрут с 
         const pool = await getPool(); // Получаем соединение с БД
 
         // Проверяем, существует ли категория
-        const existingCategory = await pool.request()
-            .input('id', sql.Int, categoryId) // Передаем ID
-            .query('SELECT id, name FROM C_Category WHERE id = @id'); // Ищем категорию
+        const existingCategory = await pool.query(
+            'SELECT id, name FROM Category WHERE id = $1',
+            [categoryId] // Передаем ID
+        );
 
-        if (existingCategory.recordset.length === 0) { // Если не найдена
+        if (existingCategory.rows.length === 0) { // Если не найдена
             return res.status(404).json({ // Ошибка 404
                 success: false,
                 error: 'Категория не найдена'
@@ -149,11 +152,12 @@ router.delete('/:categoryId', async (req, res) => { // DELETE-маршрут с 
         }
 
         // Проверяем, есть ли товары в этой категории
-        const productsCheck = await pool.request()
-            .input('id_category', sql.Int, categoryId) // Передаем ID категории
-            .query('SELECT id FROM C_Product WHERE id_category = @id_category'); // Ищем товары с этой категорией
+        const productsCheck = await pool.query(
+            'SELECT id FROM Product WHERE id_category = $1',
+            [categoryId] // Передаем ID категории
+        );
 
-        if (productsCheck.recordset.length > 0) { // Если есть товары
+        if (productsCheck.rows.length > 0) { // Если есть товары
             return res.status(409).json({ // Ошибка конфликта (409)
                 success: false,
                 error: 'Невозможно удалить категорию, так как в ней есть товары. Сначала удалите или переместите товары'
@@ -161,9 +165,10 @@ router.delete('/:categoryId', async (req, res) => { // DELETE-маршрут с 
         }
 
         // Жесткое удаление
-        await pool.request()
-            .input('id', sql.Int, categoryId) // Передаем ID
-            .query('DELETE FROM C_Category WHERE id = @id'); // Выполняем удаление
+        await pool.query(
+            'DELETE FROM Category WHERE id = $1',
+            [categoryId] // Передаем ID
+        );
 
         res.status(200).json({ // Отправляем успешный ответ
             success: true,
@@ -174,7 +179,7 @@ router.delete('/:categoryId', async (req, res) => { // DELETE-маршрут с 
         console.error('Ошибка при удалении категории:', err); // Логируем
         
         // Обработка ошибки внешнего ключа (на всякий случай)
-        if (err.number === 547) { // Код 547 - нарушение FOREIGN KEY (MSSQL)
+        if (err.code === '23503') { // Код 23503 - нарушение FOREIGN KEY (PostgreSQL)
             return res.status(409).json({ // Ошибка конфликта
                 success: false,
                 error: 'Невозможно удалить категорию, так как она используется в товарах'

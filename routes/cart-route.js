@@ -1,5 +1,5 @@
 const express = require('express');
-const { sql, getPool } = require('../database');
+const { getPool } = require('../database');
 
 const router = express.Router();
 
@@ -10,36 +10,34 @@ router.get('/:userId', async (req, res) => { // GET-маршрут с парам
     try { // Блок для перехвата ошибок
         const pool = await getPool(); // Получаем соединение с БД из пула
 
-        const result = await pool.request() // Создаем запрос
-            .input('id_user', sql.Int, userId) // Передаем ID пользователя как параметр
-            .query(`
-                SELECT 
-                    c.id,
-                    c.id_product,
-                    c.quantity,
-                    c.date,
-                    p.name as product_name,
-                    p.price,
-                    p.manufacturer,
-                    (p.price * c.quantity) as subtotal
-                FROM C_Cart c
-                JOIN C_Product p ON c.id_product = p.id
-                WHERE c.id_user = @id_user
-                ORDER BY c.date DESC
-            `); // Выполняем SQL-запрос с JOIN для получения товаров в корзине
+        const result = await pool.query(`
+            SELECT 
+                c.id,
+                c.id_product,
+                c.quantity,
+                c.date,
+                p.name as product_name,
+                p.price,
+                p.manufacturer,
+                (p.price * c.quantity) as subtotal
+            FROM Cart c
+            JOIN Product p ON c.id_product = p.id
+            WHERE c.id_user = $1
+            ORDER BY c.date DESC
+        `, [userId]); // Выполняем SQL-запрос с JOIN для получения товаров в корзине
 
         // Считаем общую сумму корзины
         let totalAmount = 0; // Инициализируем переменную для общей суммы
-        for (const item of result.recordset) { // Проходим по всем товарам в корзине
-            totalAmount += item.subtotal; // Добавляем сумму каждого товара
+        for (const item of result.rows) { // Проходим по всем товарам в корзине
+            totalAmount += parseInt(item.subtotal); // Добавляем сумму каждого товара
         }
 
         res.json({ // Отправляем JSON-ответ
             success: true, // Флаг успешного выполнения
             message: 'Данные успешно получены', // Сообщение об успехе
             data: { // Объект с данными
-                items: result.recordset, // Массив товаров в корзине
-                totalItems: result.recordset.length, // Общее количество позиций
+                items: result.rows, // Массив товаров в корзине
+                totalItems: result.rows.length, // Общее количество позиций
                 totalAmount: totalAmount // Общая сумма корзины
             }
         });
@@ -76,11 +74,12 @@ router.post('/', async (req, res) => { // POST-маршрут для добав�
         const pool = await getPool(); // Получаем соединение с БД
 
         // Проверяем, существует ли пользователь
-        const userCheck = await pool.request()
-            .input('id', sql.Int, id_user) // Передаем ID пользователя
-            .query('SELECT id FROM C_User WHERE id = @id'); // Ищем пользователя по ID
+        const userCheck = await pool.query(
+            'SELECT id FROM "User" WHERE id = $1',
+            [id_user] // Передаем ID пользователя
+        );
 
-        if (userCheck.recordset.length === 0) { // Если пользователь не найден
+        if (userCheck.rows.length === 0) { // Если пользователь не найден
             return res.status(404).json({ // Ошибка 404 (не найдено)
                 success: false,
                 error: 'Пользователь не найден'
@@ -88,18 +87,19 @@ router.post('/', async (req, res) => { // POST-маршрут для добав�
         }
 
         // Проверяем, существует ли товар
-        const productCheck = await pool.request()
-            .input('id', sql.Int, id_product) // Передаем ID товара
-            .query('SELECT id, name, price, quantity as stock_quantity FROM C_Product WHERE id = @id'); // Получаем информацию о товаре
+        const productCheck = await pool.query(
+            'SELECT id, name, price, quantity as stock_quantity FROM Product WHERE id = $1',
+            [id_product] // Передаем ID товара
+        );
 
-        if (productCheck.recordset.length === 0) { // Если товар не найден
+        if (productCheck.rows.length === 0) { // Если товар не найден
             return res.status(404).json({ // Ошибка 404
                 success: false,
                 error: 'Товар не найден'
             });
         }
 
-        const product = productCheck.recordset[0]; // Получаем данные товара
+        const product = productCheck.rows[0]; // Получаем данные товара
 
         // Проверяем, достаточно ли товара на складе
         if (product.stock_quantity < quantity) { // Если на складе меньше запрашиваемого количества
@@ -110,19 +110,19 @@ router.post('/', async (req, res) => { // POST-маршрут для добав�
         }
 
         // Проверяем, есть ли уже этот товар в корзине пользователя
-        const existingCartItem = await pool.request()
-            .input('id_user', sql.Int, id_user) // Передаем ID пользователя
-            .input('id_product', sql.Int, id_product) // Передаем ID товара
-            .query('SELECT id, quantity FROM C_Cart WHERE id_user = @id_user AND id_product = @id_product'); // Поиск в корзине
+        const existingCartItem = await pool.query(
+            'SELECT id, quantity FROM Cart WHERE id_user = $1 AND id_product = $2',
+            [id_user, id_product] // Передаем ID пользователя и ID товара
+        );
 
-        if (existingCartItem.recordset.length > 0) { // Если товар уже есть в корзине
+        if (existingCartItem.rows.length > 0) { // Если товар уже есть в корзине
             // Обновляем количество, если товар уже есть в корзине
-            const newQuantity = existingCartItem.recordset[0].quantity + quantity; // Суммируем количество
+            const newQuantity = existingCartItem.rows[0].quantity + quantity; // Суммируем количество
             
-            await pool.request()
-                .input('id', sql.Int, existingCartItem.recordset[0].id) // Передаем ID записи в корзине
-                .input('quantity', sql.Int, newQuantity) // Передаем новое количество
-                .query('UPDATE C_Cart SET quantity = @quantity WHERE id = @id'); // Обновляем количество
+            await pool.query(
+                'UPDATE Cart SET quantity = $1 WHERE id = $2',
+                [newQuantity, existingCartItem.rows[0].id] // Передаем новое количество и ID записи
+            );
 
             res.status(200).json({ // Отправляем успешный ответ со статусом 200
                 success: true,
@@ -130,15 +130,11 @@ router.post('/', async (req, res) => { // POST-маршрут для добав�
             });
         } else { // Если товара нет в корзине
             // Добавляем новый товар в корзину
-            const result = await pool.request()
-                .input('id_user', sql.Int, id_user) // Передаем ID пользователя
-                .input('id_product', sql.Int, id_product) // Передаем ID товара
-                .input('quantity', sql.Int, quantity) // Передаем количество
-                .input('date', sql.Date, new Date()) // Передаем текущую дату
-                .query(`
-                    INSERT INTO C_Cart (id_user, id_product, quantity, date) 
-                    VALUES (@id_user, @id_product, @quantity, @date)
-                `); // Выполняем INSERT-запрос
+            const result = await pool.query(
+                `INSERT INTO Cart (id_user, id_product, quantity, date) 
+                 VALUES ($1, $2, $3, $4)`,
+                [id_user, id_product, quantity, new Date()] // Передаем значения
+            );
 
             res.status(201).json({ // Отправляем ответ со статусом 201 (создано)
                 success: true,
@@ -170,16 +166,14 @@ router.delete('/', async (req, res) => { // DELETE-маршрут для уда�
         const pool = await getPool(); // Получаем соединение с БД
 
         // Проверяем, существует ли товар в корзине пользователя
-        const cartItem = await pool.request()
-            .input('id_user', sql.Int, id_user) // Передаем ID пользователя
-            .input('id_product', sql.Int, id_product) // Передаем ID товара
-            .query(`
-                SELECT c.id
-                FROM C_Cart c
-                WHERE c.id_user = @id_user AND c.id_product = @id_product
-            `); // Ищем запись в корзине
+        const cartItem = await pool.query(
+            `SELECT c.id
+             FROM Cart c
+             WHERE c.id_user = $1 AND c.id_product = $2`,
+            [id_user, id_product] // Передаем ID пользователя и ID товара
+        );
 
-        if (cartItem.recordset.length === 0) { // Если товар не найден в корзине
+        if (cartItem.rows.length === 0) { // Если товар не найден в корзине
             return res.status(404).json({ // Ошибка 404
                 success: false,
                 error: 'Товар не найден в корзине пользователя'
@@ -187,9 +181,10 @@ router.delete('/', async (req, res) => { // DELETE-маршрут для уда�
         }
 
         // Удаляем товар из корзины
-        await pool.request()
-            .input('id', sql.Int, cartItem.recordset[0].id) // Передаем ID записи в корзине
-            .query('DELETE FROM C_Cart WHERE id = @id'); // Выполняем удаление
+        await pool.query(
+            'DELETE FROM Cart WHERE id = $1',
+            [cartItem.rows[0].id] // Передаем ID записи в корзине
+        );
 
         res.status(200).json({ // Отправляем успешный ответ
             success: true,
@@ -217,20 +212,19 @@ router.delete('/buy', async (req, res) => { // DELETE-маршрут для оф
         });
     }
 
+    const client = await (await getPool()).connect(); // Получаем клиента из пула для транзакции
+
     try { // Блок try
-        const pool = await getPool(); // Получаем соединение с БД
-
         // Получаем все товары в корзине пользователя
-        const cartItems = await pool.request()
-            .input('id_user', sql.Int, id_user) // Передаем ID пользователя
-            .query(`
-                SELECT c.id_product, c.quantity, p.name, p.price, p.quantity as stock_quantity
-                FROM C_Cart c
-                JOIN C_Product p ON c.id_product = p.id
-                WHERE c.id_user = @id_user
-            `); // Запрос на получение товаров с информацией о наличии
+        const cartItems = await client.query(
+            `SELECT c.id_product, c.quantity, p.name, p.price, p.quantity as stock_quantity
+             FROM Cart c
+             JOIN Product p ON c.id_product = p.id
+             WHERE c.id_user = $1`,
+            [id_user] // Передаем ID пользователя
+        );
 
-        if (cartItems.recordset.length === 0) { // Если корзина пуста
+        if (cartItems.rows.length === 0) { // Если корзина пуста
             return res.status(400).json({ // Ошибка 400
                 success: false,
                 error: 'Корзина пользователя пуста'
@@ -241,7 +235,7 @@ router.delete('/buy', async (req, res) => { // DELETE-маршрут для оф
         let totalAmount = 0; // Инициализируем общую сумму
         let insufficientStock = []; // Массив для товаров с недостаточным количеством
 
-        for (const item of cartItems.recordset) { // Проходим по всем товарам в корзине
+        for (const item of cartItems.rows) { // Проходим по всем товарам в корзине
             if (item.stock_quantity < item.quantity) { // Если на складе меньше запрашиваемого
                 insufficientStock.push({ // Добавляем в список недостающих
                     id_product: item.id_product,
@@ -262,46 +256,37 @@ router.delete('/buy', async (req, res) => { // DELETE-маршрут для оф
         }
 
         // Начинаем транзакцию
-        const transaction = new sql.Transaction(pool); // Создаем объект транзакции
-        await transaction.begin(); // Начинаем транзакцию
+        await client.query('BEGIN'); // Начинаем транзакцию
 
         try { // Внутренний блок try для транзакции
             // 1. Создаем заказ
-            const orderResult = await transaction.request() // Используем transaction.request() вместо pool.request()
-                .input('id_user', sql.Int, id_user) // Передаем ID пользователя
-                .input('date', sql.DateTime, new Date()) // Передаем текущую дату и время
-                .query(`
-                    INSERT INTO C_Order (id_user, date) 
-                    VALUES (@id_user, @date);
-                    SELECT SCOPE_IDENTITY() AS id
-                `); // Вставляем заказ и получаем его ID
+            const orderResult = await client.query(
+                `INSERT INTO "Order" (id_user, date) 
+                 VALUES ($1, $2)
+                 RETURNING id`,
+                [id_user, new Date()] // Передаем ID пользователя и текущую дату
+            );
 
-            const orderId = orderResult.recordset[0].id; // Получаем ID созданного заказа
+            const orderId = orderResult.rows[0].id; // Получаем ID созданного заказа
 
-            // 2. Добавляем товары в C_OrderItem и уменьшаем количество на складе
+            // 2. Добавляем товары в OrderItem и уменьшаем количество на складе
             const orderItems = []; // Массив для деталей заказа
             
-            for (const item of cartItems.recordset) { // Проходим по всем товарам в корзине
+            for (const item of cartItems.rows) { // Проходим по всем товарам в корзине
                 // Добавляем товар в заказ
-                await transaction.request()
-                    .input('id_product', sql.Int, item.id_product) // Передаем ID товара
-                    .input('id_order', sql.Int, orderId) // Передаем ID заказа
-                    .input('price', sql.Money, item.price) // Передаем цену
-                    .input('quantity', sql.Int, item.quantity) // Передаем количество
-                    .query(`
-                        INSERT INTO C_OrderItem (id_product, id_order, price, quantity) 
-                        VALUES (@id_product, @id_order, @price, @quantity)
-                    `); // Вставляем запись в OrderItem
+                await client.query(
+                    `INSERT INTO OrderItem (id_product, id_order, price, quantity) 
+                     VALUES ($1, $2, $3, $4)`,
+                    [item.id_product, orderId, item.price, item.quantity] // Передаем значения
+                );
 
                 // Уменьшаем количество товара на складе
-                await transaction.request()
-                    .input('id_product', sql.Int, item.id_product) // Передаем ID товара
-                    .input('quantity', sql.Int, item.quantity) // Передаем количество для списания
-                    .query(`
-                        UPDATE C_Product 
-                        SET quantity = quantity - @quantity 
-                        WHERE id = @id_product
-                    `); // Обновляем остатки
+                await client.query(
+                    `UPDATE Product 
+                     SET quantity = quantity - $1 
+                     WHERE id = $2`,
+                    [item.quantity, item.id_product] // Передаем количество для списания и ID товара
+                );
 
                 orderItems.push({ // Добавляем информацию о товаре в массив
                     id_product: item.id_product,
@@ -313,11 +298,12 @@ router.delete('/buy', async (req, res) => { // DELETE-маршрут для оф
             }
 
             // 3. Очищаем корзину пользователя
-            await transaction.request()
-                .input('id_user', sql.Int, id_user) // Передаем ID пользователя
-                .query('DELETE FROM C_Cart WHERE id_user = @id_user'); // Удаляем все товары из корзины
+            await client.query(
+                'DELETE FROM Cart WHERE id_user = $1',
+                [id_user] // Передаем ID пользователя
+            );
 
-            await transaction.commit(); // Фиксируем транзакцию (сохраняем все изменения)
+            await client.query('COMMIT'); // Фиксируем транзакцию (сохраняем все изменения)
 
             res.status(200).json({ // Отправляем успешный ответ
                 success: true,
@@ -332,7 +318,7 @@ router.delete('/buy', async (req, res) => { // DELETE-маршрут для оф
             });
 
         } catch (err) { // Если произошла ошибка в транзакции
-            await transaction.rollback(); // Откатываем транзакцию (отменяем все изменения)
+            await client.query('ROLLBACK'); // Откатываем транзакцию (отменяем все изменения)
             throw err; // Пробрасываем ошибку дальше
         }
 
@@ -342,6 +328,8 @@ router.delete('/buy', async (req, res) => { // DELETE-маршрут для оф
             success: false,
             error: 'Серверная ошибка при оформлении покупки'
         });
+    } finally {
+        client.release(); // Возвращаем клиента в пул
     }
 });
 
